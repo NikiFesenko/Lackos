@@ -1,0 +1,30 @@
+# Environment secrets — never commit
+.env
+
+# Go build artifacts
+/bin/
+*.exe
+*.test
+*.out
+
+# Dependency vendors (we use go modules)
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (Phase 7 dashboard)
+web/node_modules/
+web/dist/
+web/.env.local
+
+# Test coverage
+coverage.out
+coverage.html

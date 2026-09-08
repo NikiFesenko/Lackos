@@ -1,0 +1,175 @@
+# MCP Gate — docker-compose.yml
+# Brings up the full local development stack with one command: make dev
+# All secrets come from .env (copy .env.example → .env before first run).
+
+name: mcp-gate
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER:  ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS:  ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"   # Management UI (dev only)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Migrations ──────────────────────────────────────────────────────────────
+  # Runs golang-migrate against Postgres, then exits (restart: no).
+  # Dependent services will wait for this to succeed before starting.
+
+  migrate:
+    image: migrate/migrate:v4.17.1
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=${POSTGRES_DSN}"
+      - "up"
+    # migrate exits 0 on success, non-zero on failure.
+    # If migrations are already applied, it exits 0 with "no change".
+
+  # ── Application services ────────────────────────────────────────────────────
+
+  proxy:
+    build:
+      context: .
+      dockerfile: build/proxy.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN}
+      REDIS_URL:    ${REDIS_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      PROXY_PORT:   ${PROXY_PORT:-8080}
+      ADMIN_TOKEN:  ${ADMIN_TOKEN}
+      LOG_LEVEL:    ${LOG_LEVEL:-info}
+    ports:
+      - "${PROXY_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  adminapi:
+    build:
+      context: .
+      dockerfile: build/adminapi.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      POSTGRES_DSN:  ${POSTGRES_DSN}
+      REDIS_URL:     ${REDIS_URL}
+      RABBITMQ_URL:  ${RABBITMQ_URL}
+      ADMINAPI_PORT: ${ADMINAPI_PORT:-8081}
+      ADMIN_TOKEN:   ${ADMIN_TOKEN}
+      LOG_LEVEL:     ${LOG_LEVEL:-info}
+    ports:
+      - "${ADMINAPI_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    build:
+      context: .
+      dockerfile: build/worker.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN}
+      REDIS_URL:    ${REDIS_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      ADMIN_TOKEN:  ${ADMIN_TOKEN}
+      LOG_LEVEL:    ${LOG_LEVEL:-info}
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: build/dashboard.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      adminapi:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
