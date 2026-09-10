@@ -2,7 +2,7 @@
 
 > A self-hostable governance proxy that sits between AI agents and MCP servers for HR/people-ops tools.
 
-Many community-built MCP servers authenticate with a single shared API key — no per-user identity, no permission scoping, no audit trail. **MCP Gate** fixes this by requiring every request to authenticate as a specific individual employee, enforcing role-based policies (including field-level response redaction), and logging every tool call asynchronously.
+Any community-built MCP servers authenticate with a single shared API key — no per-user identity, no permission scoping, no audit trail. **MCP Gate** fixes this by requiring every request to authenticate as a specific individual employee, enforcing role-based policies (including field-level response redaction), and logging every tool call asynchronously.
 
 ```
 AI Agent ──▶ MCP Gate Proxy ──▶ Downstream MCP Server (BambooHR, etc.)
