@@ -74,3 +74,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 
 *Next: Phase 3 — Admin REST API CRUD (users, roles, downstream servers, policies, audit log) backed by real Postgres.*
+
+---
+
+## [Phase 3] — 2026-09-11 · Admin REST API
+
+### Added
+
+**New packages:**
+- `internal/api` — shared JSON response/error helpers (`WriteJSON`, `WriteError`) and standard error code constants
+- `internal/middleware` — three middleware functions:
+  - `RequestID` — injects/echoes `X-Request-ID` on every request
+  - `Logger` — structured `slog` request logging (method, path, status, latency, request ID)
+  - `RequireAdminToken` — Bearer token enforcement; `/healthz` is exempt
+- `internal/handlers` — all CRUD HTTP handlers backed by the sqlc `Querier` interface:
+  - `roles.go` — `ListRoles`, `CreateRole`, `GetRole`, `UpdateRole`, `DeleteRole`
+  - `users.go` — `ListUsers`, `CreateUser`, `GetUser`, `UpdateUserRole`, `DeactivateUser` (soft-delete)
+  - `downstream_servers.go` — full CRUD; DELETE soft-deactivates (never hard-deletes)
+  - `policies.go` — `ListPolicies` (filter by role_id), `UpsertPolicy`, `GetPolicy`, `DeletePolicy`
+  - `audit_events.go` — `ListAuditEvents` with pagination and optional filters (user_id, downstream_server_id, outcome)
+
+**Updated:**
+- `cmd/adminapi/main.go` — wires Postgres pool, all routes, middleware chain (RequestID → Logger → Auth → mux)
+
+**Endpoints:**
+```
+GET/POST         /api/v1/roles
+GET/PUT/DELETE   /api/v1/roles/{id}
+GET/POST         /api/v1/users
+GET              /api/v1/users/{id}
+PUT              /api/v1/users/{id}/role
+DELETE           /api/v1/users/{id}
+GET/POST         /api/v1/downstream-servers
+GET/PUT/DELETE   /api/v1/downstream-servers/{id}
+GET/POST         /api/v1/policies
+GET/DELETE       /api/v1/policies/{id}
+GET              /api/v1/audit-events
+```
+
+**Tests (handler integration, real DB via testcontainers):**
+- `roles_test.go` — list empty, create success, missing name, duplicate name, not found, invalid UUID
+- `users_test.go` — create success, duplicate email, missing fields, soft-deactivate
+- `policies_test.go` — upsert create, upsert update in-place (ID stable), list by role, missing fields
+
+### Design decisions
+- **Soft-delete everywhere**: users and downstream servers are deactivated, never hard-deleted — audit events reference them by FK so hard-delete would corrupt history.
+- **`UpsertPolicy` is idempotent**: the admin dashboard can call POST /api/v1/policies repeatedly; the UUID is stable on updates.
+- **`auth_secret_ref` accepted as-is**: the API stores the reference string verbatim and never resolves or logs it.
+- **Go 1.22 pattern matching**: `{id}` path variables use stdlib `r.PathValue()` — no external router needed.
+
+---
+
+*Next: Phase 4 — Policy engine + Redis cache (with fail-closed unit tests)*

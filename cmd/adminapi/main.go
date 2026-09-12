@@ -1,8 +1,6 @@
 // Binary adminapi serves the REST API consumed by the React admin dashboard.
 // It allows HR ops/security admins to manage users, roles, policies,
 // downstream servers, and view the audit log.
-//
-// Phase 1: skeleton only — exposes GET /healthz.
 package main
 
 import (
@@ -16,7 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/mcp-gate/mcp-gate/internal/config"
+	"github.com/mcp-gate/mcp-gate/internal/db"
+	"github.com/mcp-gate/mcp-gate/internal/handlers"
+	"github.com/mcp-gate/mcp-gate/internal/middleware"
 )
 
 func main() {
@@ -25,15 +28,69 @@ func main() {
 	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
+	// ── Database ───────────────────────────────────────────────────────────
+	pool, err := pgxpool.New(context.Background(), cfg.PostgresDSN)
+	if err != nil {
+		slog.Error("failed to create postgres pool", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(context.Background()); err != nil {
+		slog.Error("failed to connect to postgres", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("connected to postgres")
+
+	// ── Handlers & Router ──────────────────────────────────────────────────
+	h := handlers.New(db.New(pool))
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthzHandler("adminapi"))
+
+	// Health (no auth required)
+	mux.HandleFunc("GET /healthz", healthzHandler)
+
+	// ── Roles
+	mux.HandleFunc("GET /api/v1/roles",        h.ListRoles)
+	mux.HandleFunc("POST /api/v1/roles",        h.CreateRole)
+	mux.HandleFunc("GET /api/v1/roles/{id}",    h.GetRole)
+	mux.HandleFunc("PUT /api/v1/roles/{id}",    h.UpdateRole)
+	mux.HandleFunc("DELETE /api/v1/roles/{id}", h.DeleteRole)
+
+	// ── Users
+	mux.HandleFunc("GET /api/v1/users",                  h.ListUsers)
+	mux.HandleFunc("POST /api/v1/users",                  h.CreateUser)
+	mux.HandleFunc("GET /api/v1/users/{id}",              h.GetUser)
+	mux.HandleFunc("PUT /api/v1/users/{id}/role",         h.UpdateUserRole)
+	mux.HandleFunc("DELETE /api/v1/users/{id}",           h.DeactivateUser)
+
+	// ── Downstream servers
+	mux.HandleFunc("GET /api/v1/downstream-servers",           h.ListDownstreamServers)
+	mux.HandleFunc("POST /api/v1/downstream-servers",           h.CreateDownstreamServer)
+	mux.HandleFunc("GET /api/v1/downstream-servers/{id}",       h.GetDownstreamServer)
+	mux.HandleFunc("PUT /api/v1/downstream-servers/{id}",       h.UpdateDownstreamServer)
+	mux.HandleFunc("DELETE /api/v1/downstream-servers/{id}",    h.SetDownstreamServerActive)
+
+	// ── Policies
+	mux.HandleFunc("GET /api/v1/policies",        h.ListPolicies)
+	mux.HandleFunc("POST /api/v1/policies",        h.UpsertPolicy)
+	mux.HandleFunc("GET /api/v1/policies/{id}",   h.GetPolicy)
+	mux.HandleFunc("DELETE /api/v1/policies/{id}", h.DeletePolicy)
+
+	// ── Audit log (read-only)
+	mux.HandleFunc("GET /api/v1/audit-events", h.ListAuditEvents)
+
+	// ── Middleware chain: RequestID → Logger → Auth → mux
+	var handler http.Handler = mux
+	handler = middleware.RequireAdminToken(cfg.AdminToken)(handler)
+	handler = middleware.Logger(handler)
+	handler = middleware.RequestID(handler)
 
 	addr := fmt.Sprintf(":%d", cfg.AdminAPIPort)
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Handler:      handler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -59,13 +116,10 @@ func main() {
 	slog.Info("adminapi stopped")
 }
 
-func healthzHandler(service string) http.HandlerFunc {
-	body, _ := json.Marshal(map[string]string{"status": "ok", "service": service})
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(body) //nolint:errcheck
-	}
+func healthzHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "adminapi"}) //nolint:errcheck
 }
 
 func newLogger(level string) *slog.Logger {
