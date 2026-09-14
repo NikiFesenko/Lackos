@@ -126,3 +126,33 @@ GET              /api/v1/audit-events
 ---
 
 *Next: Phase 4 — Policy engine + Redis cache (with fail-closed unit tests)*
+
+---
+
+## [Phase 4] — 2026-09-12 · Policy Engine & Redis Cache
+
+### Added
+
+**New packages:**
+- `internal/cache`:
+  - `keys.go` — centralized Redis key scheme (`policy:{roleID}:{serverID}:{toolName}`, `ratelimit:{userID}:{serverID}`, `token:{tokenHash}`) and standardized TTL constants.
+- `internal/policy`:
+  - `decision.go` — `Decision` struct (`Allowed`, `RedactFields`, `MaxCallsPerMinute`) and `Deny` default sentinel.
+  - `engine.go` — Policy evaluation engine with fail-closed semantics:
+    1. Fast path: check Redis cache (60s TTL).
+    2. Fallback path: on cache miss or Redis error, query Postgres using narrow `Store` interface.
+    3. Fail-closed contract: if policy not found -> default deny (cached as deny); if DB unreachable -> deny immediately.
+    4. Invalidation: `InvalidatePolicy` to evict cached policy entries upon admin mutations.
+  - `engine_test.go` — thorough unit tests using `miniredis`: cache hits, cache misses with DB load, fail-closed when both Redis and DB are down, default-deny on missing policy, explicit deny, field redaction list propagation, and cache invalidation.
+- `internal/ratelimit`:
+  - `limiter.go` — sliding-window rate limiter powered by atomic Redis sorted set Lua script (`ZREMRANGEBYSCORE`, `ZADD`, `ZCARD`, `EXPIRE`). Fails closed if Redis is unavailable.
+  - `limiter_test.go` — unit tests covering requests within limit, requests exceeding quota, zero-limit denial, per-user isolation, Redis outage fail-closed behavior, and sliding window boundaries.
+
+### Design decisions
+- **Strict Fail-Closed principle**: Any failure or ambiguity in policy evaluation or rate limiting yields `Allowed = false`. No tool call can be executed by the proxy without positive authorization.
+- **Atomic sliding window**: Rate limiting uses Redis Lua scripting with nanosecond timestamps to avoid race conditions without application-level distributed locks.
+- **Decoupled data access**: The policy engine relies on a focused `Store` interface rather than a concrete DB connection pool, allowing easy testing with in-memory mocks without external dependencies.
+
+---
+
+*Next: Phase 5 — The MCP Proxy Core (JSON-RPC handling, auth, policy enforcement, forwarding, and field redaction)*
