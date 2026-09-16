@@ -40,6 +40,11 @@ type cachedPolicy struct {
 	MaxCallsPerMinute int32    `json:"max_calls_per_minute"`
 }
 
+// noPolicyTTL is a shorter TTL used when caching a "no policy" denial.
+// Kept shorter than PolicyTTL so a newly-created policy takes effect quickly —
+// an admin adding a policy shouldn't have to wait 60 seconds.
+const noPolicyTTL = 10 * time.Second
+
 // Evaluate returns a Decision for the given (roleID, serverID, toolName) triple.
 //
 // Fail-closed contract:
@@ -76,11 +81,11 @@ func (e *Engine) Evaluate(
 	var roleUUID, serverUUID pgtype.UUID
 	if scanErr := roleUUID.Scan(roleID); scanErr != nil {
 		slog.ErrorContext(ctx, "invalid roleID UUID", "role_id", roleID, "err", scanErr)
-		return Deny, scanErr
+		return deny(), scanErr
 	}
 	if scanErr := serverUUID.Scan(serverID); scanErr != nil {
 		slog.ErrorContext(ctx, "invalid serverID UUID", "server_id", serverID, "err", scanErr)
-		return Deny, scanErr
+		return deny(), scanErr
 	}
 
 	row, dbErr := e.store.GetPolicyByRoleServerTool(ctx, db.GetPolicyByRoleServerToolParams{
@@ -94,23 +99,26 @@ func (e *Engine) Evaluate(
 			// No policy configured for this triple → default deny.
 			slog.InfoContext(ctx, "no policy found; denying",
 				"role_id", roleID, "server_id", serverID, "tool", toolName)
-			// Cache the deny so we don't hammer the DB for unknown tool calls.
-			e.cacheDecision(ctx, key, cachedPolicy{Allowed: false, RedactFields: []string{}})
-			return Deny, nil
+			// Cache the deny with a short TTL — a newly-added policy should
+			// take effect in ≤10 s, not ≤60 s.
+			go e.cacheDecisionTTL(key, cachedPolicy{Allowed: false, RedactFields: []string{}}, noPolicyTTL)
+			return deny(), nil
 		}
 		// DB unreachable — FAIL CLOSED. This is intentional and critical.
 		slog.ErrorContext(ctx, "DB unreachable during policy eval; failing closed",
 			"role_id", roleID, "server_id", serverID, "tool", toolName, "err", dbErr)
-		return Deny, dbErr
+		return deny(), dbErr
 	}
 
-	// ── 3. Got a DB row — cache it and return ────────────────────────────
+	// ── 3. Got a DB row — cache it asynchronously and return ─────────────
+	// We write to Redis in a goroutine so a slow Redis write never adds
+	// latency to the proxy's hot path.
 	cp := cachedPolicy{
 		Allowed:           row.IsAllowed,
 		RedactFields:      row.RedactFields,
 		MaxCallsPerMinute: row.MaxCallsPerMinute,
 	}
-	e.cacheDecision(ctx, key, cp)
+	go e.cacheDecisionTTL(key, cp, time.Duration(cache.PolicyTTL)*time.Second)
 
 	return Decision{
 		Allowed:           cp.Allowed,
@@ -119,16 +127,20 @@ func (e *Engine) Evaluate(
 	}, nil
 }
 
-// cacheDecision stores a policy decision in Redis.
-// Failures are logged but not fatal — the next request will do another DB round-trip.
-func (e *Engine) cacheDecision(ctx context.Context, key string, cp cachedPolicy) {
+// cacheDecisionTTL stores a policy decision in Redis with the given TTL.
+// Called in a background goroutine — failures are logged but never fatal.
+func (e *Engine) cacheDecisionTTL(key string, cp cachedPolicy, ttl time.Duration) {
 	data, err := json.Marshal(cp)
 	if err != nil {
-		slog.WarnContext(ctx, "failed to marshal policy for cache", "key", key, "err", err)
+		slog.Warn("failed to marshal policy for cache", "key", key, "err", err)
 		return
 	}
-	if err := e.redis.Set(ctx, key, data, time.Duration(cache.PolicyTTL)*time.Second).Err(); err != nil {
-		slog.WarnContext(ctx, "failed to write policy to cache", "key", key, "err", err)
+	// Use a short-lived background context so a cancelled request context
+	// doesn't abort the cache write.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := e.redis.Set(ctx, key, data, ttl).Err(); err != nil {
+		slog.Warn("failed to write policy to cache", "key", key, "err", err)
 	}
 }
 

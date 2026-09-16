@@ -16,5 +16,13 @@ type Decision struct {
 	MaxCallsPerMinute int32
 }
 
-// Deny is a convenience value returned whenever a request must be blocked.
-var Deny = Decision{Allowed: false}
+// deny returns a fresh deny Decision every call.
+// Using a function (not a var) prevents callers from accidentally mutating
+// the shared sentinel's RedactFields slice, which would be a subtle data race.
+func deny() Decision {
+	return Decision{Allowed: false, RedactFields: []string{}}
+}
+
+// Deny is the zero-value deny decision for use in return statements.
+// Prefer the deny() function internally to guarantee a fresh slice.
+var Deny = deny()

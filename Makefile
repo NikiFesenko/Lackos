@@ -38,7 +38,7 @@ ps:
 
 ## build: Build all Go binaries locally (not in Docker).
 build:
-	go build ./cmd/proxy ./cmd/adminapi ./cmd/worker
+	go build ./cmd/proxy ./cmd/adminapi ./cmd/worker ./cmd/mockdownstream
 
 ## tidy: Tidy and verify Go modules.
 tidy:

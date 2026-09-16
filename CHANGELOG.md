@@ -156,3 +156,47 @@ GET              /api/v1/audit-events
 ---
 
 *Next: Phase 5 — The MCP Proxy Core (JSON-RPC handling, auth, policy enforcement, forwarding, and field redaction)*
+
+---
+
+## [Phase 5] — 2026-09-14 · The MCP Proxy Core
+
+### Added
+
+**New packages and services:**
+- `internal/mcp`:
+  - `types.go` — MCP JSON-RPC 2.0 message structures (`Request`, `Response`, `RPCError`, `ToolCallParams`, `ToolResult`, `ContentItem`), standard JSON-RPC codes and MCP-specific error codes (`-32001` to `-32004`).
+  - `forwarder.go` — downstream HTTP client with `SecretResolver` support, header injection (`Bearer`, `X-Api-Key`), 10 MiB body limit, and full error wrapping.
+  - `redact.go` — field-level redaction that scans JSON tool call results and replaces configured sensitive keys (e.g. `salary`, `ssn`) with `"[REDACTED]"`.
+  - `redact_test.go` & `forwarder_test.go` — test coverage for redaction, auth header injection, error handling, and malformed inputs.
+- `internal/auth`:
+  - `tokens.go` — cryptographic per-user proxy token management (32 random bytes hex-encoded, SHA-256 hashed into Redis with 8h TTL, O(1) validation, immediate revocation).
+  - `resolver.go` — `EnvSecretResolver` implementing runtime resolution of `env:VAR_NAME` secret references.
+  - `tokens_test.go` & `resolver_test.go` — test coverage for token generation, hashing, expiration, and secret resolution.
+- `cmd/mockdownstream`:
+  - `main.go` — mock MCP server listening on `:9090` by default, responding to `tools/call`, `tools/list`, and `initialize` with canned records containing `salary` and `ssn` to verify redaction end-to-end.
+- `cmd/proxy`:
+  - `main.go` — complete 8-step request lifecycle:
+    1. Parse JSON-RPC 2.0 request.
+    2. Extract & validate Bearer token $\rightarrow$ resolve `user_id`.
+    3. Query active user record $\rightarrow$ resolve `role_id`.
+    4. Query active downstream server by name.
+    5. Evaluate policy engine $\rightarrow$ fail closed on deny/error.
+    6. Evaluate sliding-window rate limiter $\rightarrow$ fail closed on quota/error with `X-RateLimit-*` headers.
+    7. Forward clean tool arguments to downstream server using resolved credentials.
+    8. Redact sensitive response fields according to policy $\rightarrow$ return to agent.
+  - `proxy_test.go` — integration tests verifying the full flow with mock downstream, field redaction, default-deny on missing policy, rate limit enforcement, and unauthorized access rejection.
+- `internal/handlers`:
+  - `auth.go` — admin endpoints `POST /api/v1/auth/token` (issue) and `DELETE /api/v1/auth/token` (revoke).
+  - `auth_test.go` — unit tests for admin token management.
+- `cmd/adminapi`:
+  - `main.go` — wired Redis client and `TokenManager`, registering `/api/v1/auth/token` endpoints.
+
+### Design decisions
+- **Token hashing**: Raw tokens are never stored in Redis or database — only SHA-256 hashes are stored, preventing credential leakage in case of cache exposure.
+- **Fail-closed throughout**: Missing token, expired token, deactivated user, inactive server, missing policy, policy error, rate limit exceeded, or rate limiter error all fail closed immediately with appropriate JSON-RPC error codes.
+- **Protocol cleanliness**: Internal routing metadata (e.g. `server` target) is stripped before forwarding to downstream servers so downstream servers receive standard MCP JSON-RPC payloads.
+
+---
+
+*Next: Phase 6 — Audit Pipeline (RabbitMQ -> Postgres, async worker, DLQ)*

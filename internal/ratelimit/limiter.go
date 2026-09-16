@@ -4,8 +4,8 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,7 +15,7 @@ import (
 
 // slidingWindowScript is an atomic Lua script that:
 //  1. Removes entries older than the window.
-//  2. Adds the current request (timestamp as score, unique nanosecond key as member).
+//  2. Adds the current request (timestamp as score, unique nanosecond value as member).
 //  3. Counts entries in the window.
 //  4. Sets the key TTL so idle keys expire cleanly.
 //  5. Returns the current count.
@@ -33,7 +33,7 @@ local ttl    = tonumber(ARGV[3])
 -- Remove requests outside the sliding window.
 redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
 
--- Record the current request. Using nanoseconds makes member names unique.
+-- Record the current request. Nanosecond timestamps are practically unique.
 redis.call('ZADD', key, now, now)
 
 -- Count requests in the current window.
@@ -59,15 +59,28 @@ func New(rdb *redis.Client) *Limiter {
 type Result struct {
 	// Allowed is false when the user has exceeded their quota.
 	Allowed bool
-	// Count is the number of requests in the current window.
+	// Count is the number of requests recorded in the current window.
 	Count int64
-	// Limit is the configured cap.
+	// Limit is the configured cap (max calls per minute).
 	Limit int32
 }
 
+// Remaining returns the number of allowed calls left in the current window.
+// Returns 0 when the limit is already exceeded.
+func (r Result) Remaining() int64 {
+	rem := int64(r.Limit) - r.Count
+	if rem < 0 {
+		return 0
+	}
+	return rem
+}
+
 // Allow records the current request and returns whether it is within the limit.
-// maxCallsPerMinute=0 is treated as "deny all" (used for explicitly blocked tools).
-// If Redis is unavailable, it fails closed (returns not allowed) and logs the error.
+//
+// Behaviour:
+//   - maxCallsPerMinute ≤ 0 → always deny (tool explicitly blocked).
+//   - Redis unavailable → fail closed (deny) and log the error.
+//   - count ≤ maxCallsPerMinute → allow; count > limit → deny.
 func (l *Limiter) Allow(ctx context.Context, userID, serverID string, maxCallsPerMinute int32) (Result, error) {
 	if maxCallsPerMinute <= 0 {
 		return Result{Allowed: false, Limit: maxCallsPerMinute}, nil
@@ -80,9 +93,9 @@ func (l *Limiter) Allow(ctx context.Context, userID, serverID string, maxCallsPe
 	ttl := cache.RateLimitWindow + 5 // a few extra seconds so the key outlives the window
 
 	count, err := slidingWindowScript.Run(ctx, l.redis, []string{key},
-		fmt.Sprintf("%d", now),
-		fmt.Sprintf("%d", cutoff),
-		fmt.Sprintf("%d", ttl),
+		strconv.FormatInt(now, 10),
+		strconv.FormatInt(cutoff, 10),
+		strconv.FormatInt(int64(ttl), 10),
 	).Int64()
 
 	if err != nil {

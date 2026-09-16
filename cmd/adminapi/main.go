@@ -1,6 +1,6 @@
 // Binary adminapi serves the REST API consumed by the React admin dashboard.
 // It allows HR ops/security admins to manage users, roles, policies,
-// downstream servers, and view the audit log.
+// downstream servers, issue proxy tokens, and view the audit log.
 package main
 
 import (
@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
+	"github.com/mcp-gate/mcp-gate/internal/auth"
 	"github.com/mcp-gate/mcp-gate/internal/config"
 	"github.com/mcp-gate/mcp-gate/internal/db"
 	"github.com/mcp-gate/mcp-gate/internal/handlers"
@@ -42,8 +44,19 @@ func main() {
 	}
 	slog.Info("connected to postgres")
 
+	// ── Redis ─────────────────────────────────────────────────────────────
+	opt, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		slog.Error("failed to parse redis url", "err", err)
+		os.Exit(1)
+	}
+	rdb := redis.NewClient(opt)
+	defer rdb.Close()
+
+	tokenMgr := auth.NewTokenManager(rdb, 0)
+
 	// ── Handlers & Router ──────────────────────────────────────────────────
-	h := handlers.New(db.New(pool))
+	h := handlers.New(db.New(pool), tokenMgr)
 	mux := http.NewServeMux()
 
 	// Health (no auth required)
@@ -75,6 +88,10 @@ func main() {
 	mux.HandleFunc("POST /api/v1/policies",        h.UpsertPolicy)
 	mux.HandleFunc("GET /api/v1/policies/{id}",   h.GetPolicy)
 	mux.HandleFunc("DELETE /api/v1/policies/{id}", h.DeletePolicy)
+
+	// ── Auth Tokens (for proxy access)
+	mux.HandleFunc("POST /api/v1/auth/token",   h.IssueToken)
+	mux.HandleFunc("DELETE /api/v1/auth/token", h.RevokeToken)
 
 	// ── Audit log (read-only)
 	mux.HandleFunc("GET /api/v1/audit-events", h.ListAuditEvents)
