@@ -1,4 +1,4 @@
-.PHONY: dev down logs build lint test tidy help
+.PHONY: dev down logs build lint test tidy web-install web-dev web-build help
 
 # ── Local development ─────────────────────────────────────────────────────────
 
@@ -56,6 +56,21 @@ lint:
 ## vet: Run go vet.
 vet:
 	go vet ./...
+
+# ── Web dashboard ─────────────────────────────────────────────────────────────
+
+## web-install: Install npm dependencies for the React dashboard.
+web-install:
+	cd web && npm install
+
+## web-dev: Start Vite dev server (proxies /api to adminapi on :8081).
+web-dev:
+	cd web && npm run dev
+
+## web-build: Build the React dashboard for production.
+web-build:
+	cd web && npm run build
+
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 

@@ -30,6 +30,7 @@ type Querier interface {
 	GetRoleByName(ctx context.Context, name string) (Role, error)
 	GetUser(ctx context.Context, id pgtype.UUID) (User, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
+	InsertAuditEventWithID(ctx context.Context, arg InsertAuditEventWithIDParams) (AuditEvent, error)
 	ListActiveDownstreamServers(ctx context.Context) ([]DownstreamServer, error)
 	ListActiveUsers(ctx context.Context) ([]User, error)
 	// Paginated, most-recent first. Filtering is handled at the application layer.

@@ -1,20 +1,28 @@
-# ── Build stage ──────────────────────────────────────────────────────────────
-# Phase 1: serves a static placeholder page.
-# Phase 7: replaced with a full Vite + React build.
+# ── Stage 1: Build ─────────────────────────────────────────────────────────
+# Phase 7: Full Vite + React 18 + TypeScript build.
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Phase 7 will add: COPY web/package*.json ./ && RUN npm ci
-# Phase 7 will add: COPY web/ . && RUN npm run build
+# Install deps separately so the layer is cached unless package.json changes.
+COPY package.json package-lock.json* ./
+RUN npm ci --prefer-offline
 
-# For Phase 1, copy the static placeholder directly.
-COPY web/ ./dist/
+COPY . .
+RUN npm run build
 
-# ── Final stage ───────────────────────────────────────────────────────────────
-FROM nginx:1.27-alpine
+# ── Stage 2: Serve ──────────────────────────────────────────────────────────
+FROM nginx:1.27-alpine AS runtime
 
+# Remove default nginx content.
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy Vite build output.
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY web/nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 3000
+# Nginx config: serve SPA (try_files), proxy /api to adminapi service.
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

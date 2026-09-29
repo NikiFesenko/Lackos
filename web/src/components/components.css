@@ -1,0 +1,234 @@
+/* ── Component-level styles ────────────────────────────────────────────────── */
+/* Loaded once by App.tsx — applies to all shared components. */
+
+/* ── Button ─────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary   { background: var(--primary-dk); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #38bdf8; }
+
+.btn-danger    { background: transparent; color: var(--danger); border-color: var(--danger); }
+.btn-danger:hover:not(:disabled) { background: rgba(248,113,113,0.1); }
+
+.btn-ghost     { background: transparent; color: var(--text-muted); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+
+.btn-sm { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+
+/* ── Card ────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+}
+
+/* ── Table ───────────────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.tbl th, .tbl td {
+  padding: 0.6rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.tbl th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--surface-2);
+}
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tbody tr:hover { background: var(--surface-2); }
+
+/* ── Badge ───────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.badge-green { background: rgba(74,222,128,0.15); color: var(--success); }
+.badge-red   { background: rgba(248,113,113,0.15); color: var(--danger); }
+.badge-blue  { background: rgba(56,189,248,0.15);  color: var(--primary); }
+.badge-warn  { background: rgba(251,191,36,0.15);  color: var(--warn); }
+.badge-muted { background: var(--surface-2);        color: var(--text-muted); }
+
+/* ── Form ────────────────────────────────────────────────────────────────── */
+.form-group { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
+.form-label { font-size: 0.85rem; color: var(--text-muted); font-weight: 500; }
+.form-input, .form-select, .form-textarea {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.9rem;
+  padding: 0.5rem 0.75rem;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus {
+  border-color: var(--primary);
+}
+.form-textarea { resize: vertical; min-height: 80px; font-family: var(--font-mono); }
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.75rem;
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal h2 { font-size: 1.1rem; font-weight: 700; margin-bottom: 1.25rem; }
+.modal-footer {
+  display: flex; justify-content: flex-end; gap: 0.75rem;
+  margin-top: 1.25rem; padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Page layout ─────────────────────────────────────────────────────────── */
+.page { padding: 1.5rem 2rem; max-width: 1200px; }
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+.page-title { font-size: 1.25rem; font-weight: 700; }
+
+/* ── Sidebar layout ──────────────────────────────────────────────────────── */
+.layout { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 0;
+}
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text);
+}
+.sidebar-logo span { color: var(--primary); }
+
+.sidebar-nav { flex: 1; padding: 1rem 0; }
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 1.25rem;
+  color: var(--text-muted);
+  border-radius: 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.1s, color 0.1s;
+}
+.nav-item:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.nav-item.active { background: rgba(56,189,248,0.12); color: var(--primary); font-weight: 600; }
+
+.sidebar-footer { padding: 1rem 1.25rem; border-top: 1px solid var(--border); }
+
+.main-content { flex: 1; overflow-y: auto; }
+
+/* ── Alert / Error ───────────────────────────────────────────────────────── */
+.alert {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+.alert-error { background: rgba(248,113,113,0.12); color: var(--danger); border: 1px solid rgba(248,113,113,0.3); }
+.alert-success { background: rgba(74,222,128,0.12); color: var(--success); border: 1px solid rgba(74,222,128,0.3); }
+
+/* ── Spinner ─────────────────────────────────────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 24px; height: 24px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.spinner-center { display: flex; justify-content: center; padding: 3rem 0; }
+
+/* ── Toggle ──────────────────────────────────────────────────────────────── */
+.toggle {
+  position: relative; display: inline-block; width: 40px; height: 22px;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--border); border-radius: 999px; transition: 0.2s;
+}
+.toggle-slider::before {
+  content: ""; position: absolute;
+  width: 16px; height: 16px; left: 3px; bottom: 3px;
+  background: white; border-radius: 50%; transition: 0.2s;
+}
+.toggle input:checked + .toggle-slider { background: var(--primary-dk); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+/* ── Chip input ──────────────────────────────────────────────────────────── */
+.chip-wrap {
+  display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.35rem 0.5rem; min-height: 38px;
+}
+.chip-wrap:focus-within { border-color: var(--primary); }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 999px; padding: 0.15rem 0.55rem; font-size: 0.8rem; color: var(--text);
+}
+.chip button {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); line-height: 1; padding: 0; font-size: 0.9rem;
+}
+.chip button:hover { color: var(--danger); }
+.chip-input {
+  background: transparent; border: none; outline: none;
+  color: var(--text); font-size: 0.875rem; min-width: 80px; flex: 1;
+}

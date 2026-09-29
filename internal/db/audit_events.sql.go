@@ -101,6 +101,61 @@ func (q *Queries) GetAuditEvent(ctx context.Context, id pgtype.UUID) (AuditEvent
 	return i, err
 }
 
+const insertAuditEventWithID = `-- name: InsertAuditEventWithID :one
+INSERT INTO audit_events (
+    id,
+    user_id,
+    downstream_server_id,
+    tool_name,
+    input_params_redacted,
+    outcome,
+    response_summary,
+    latency_ms,
+    occurred_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (id) DO NOTHING
+RETURNING id, user_id, downstream_server_id, tool_name, input_params_redacted, outcome, response_summary, latency_ms, occurred_at
+`
+
+type InsertAuditEventWithIDParams struct {
+	ID                  pgtype.UUID        `json:"id"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	DownstreamServerID  pgtype.UUID        `json:"downstream_server_id"`
+	ToolName            string             `json:"tool_name"`
+	InputParamsRedacted []byte             `json:"input_params_redacted"`
+	Outcome             string             `json:"outcome"`
+	ResponseSummary     []byte             `json:"response_summary"`
+	LatencyMs           *int32             `json:"latency_ms"`
+	OccurredAt          pgtype.Timestamptz `json:"occurred_at"`
+}
+
+func (q *Queries) InsertAuditEventWithID(ctx context.Context, arg InsertAuditEventWithIDParams) (AuditEvent, error) {
+	row := q.db.QueryRow(ctx, insertAuditEventWithID,
+		arg.ID,
+		arg.UserID,
+		arg.DownstreamServerID,
+		arg.ToolName,
+		arg.InputParamsRedacted,
+		arg.Outcome,
+		arg.ResponseSummary,
+		arg.LatencyMs,
+		arg.OccurredAt,
+	)
+	var i AuditEvent
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.DownstreamServerID,
+		&i.ToolName,
+		&i.InputParamsRedacted,
+		&i.Outcome,
+		&i.ResponseSummary,
+		&i.LatencyMs,
+		&i.OccurredAt,
+	)
+	return i, err
+}
+
 const listAuditEvents = `-- name: ListAuditEvents :many
 SELECT id, user_id, downstream_server_id, tool_name, input_params_redacted, outcome, response_summary, latency_ms, occurred_at FROM audit_events
 ORDER BY occurred_at DESC

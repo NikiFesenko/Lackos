@@ -99,3 +99,17 @@ func TestRedactFields_PreservesIsError(t *testing.T) {
 	assert.True(t, out.IsError)
 	assert.Contains(t, out.Content[0].Text, `"salary":"[REDACTED]"`)
 }
+
+// TestRedactJSONBytes verifies raw JSON bytes redaction.
+func TestRedactJSONBytes(t *testing.T) {
+	raw := []byte(`{"name":"Alice","secret_param":"confidential"}`)
+	redacted := mcp.RedactJSONBytes(raw, []string{"secret_param"})
+	assert.Contains(t, string(redacted), `"secret_param":"[REDACTED]"`)
+	assert.Contains(t, string(redacted), `"name":"Alice"`)
+
+	// Empty fields or invalid JSON
+	assert.Equal(t, raw, mcp.RedactJSONBytes(raw, nil))
+	invalid := []byte("not-json")
+	assert.Equal(t, invalid, mcp.RedactJSONBytes(invalid, []string{"secret_param"}))
+}
+

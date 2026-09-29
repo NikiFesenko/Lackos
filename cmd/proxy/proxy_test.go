@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mcp-gate/mcp-gate/internal/audit"
 	"github.com/mcp-gate/mcp-gate/internal/auth"
 	"github.com/mcp-gate/mcp-gate/internal/db"
 	"github.com/mcp-gate/mcp-gate/internal/mcp"
@@ -370,3 +371,98 @@ func TestProxy_DeactivatedUser_Denied(t *testing.T) {
 	assert.Equal(t, mcp.CodeUnauthorized, rpcResp.Error.Code)
 	assert.Contains(t, rpcResp.Error.Message, "deactivated")
 }
+
+func TestProxy_AuditEventsPublished(t *testing.T) {
+	userIDStr := "00000000-0000-0000-0000-000000000001"
+	roleIDStr := "00000000-0000-0000-0000-000000000002"
+	serverIDStr := "00000000-0000-0000-0000-000000000003"
+
+	mq := &mockQuerier{
+		user: db.User{
+			ID:       testUUID(userIDStr),
+			Email:    "alice@example.com",
+			RoleID:   testUUID(roleIDStr),
+			IsActive: true,
+		},
+		downstream: db.DownstreamServer{
+			ID:            testUUID(serverIDStr),
+			Name:          "mock-bamboohr",
+			AuthType:      "bearer",
+			AuthSecretRef: "env:TEST_KEY",
+			IsActive:      true,
+		},
+		policy: db.Policy{
+			ID:                 testUUID("00000000-0000-0000-0000-000000000004"),
+			RoleID:             testUUID(roleIDStr),
+			DownstreamServerID: testUUID(serverIDStr),
+			ToolName:           "get_employee_record",
+			IsAllowed:          true,
+			RedactFields:       []string{"salary"},
+			MaxCallsPerMinute:  60,
+		},
+	}
+
+	// 1. Mock downstream MCP server
+	mockDownstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		record := map[string]any{"name": "Alice", "salary": 100000}
+		rawText, _ := json.Marshal(record)
+		result := mcp.ToolResult{
+			Content: []mcp.ContentItem{{Type: "text", Text: string(rawText)}},
+		}
+		rawRes, _ := json.Marshal(result)
+		resp := mcp.Response{JSONRPC: "2.0", ID: json.RawMessage(`1`), Result: rawRes}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer mockDownstream.Close()
+
+	// 2. Miniredis
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	tokenMgr := auth.NewTokenManager(rdb, 0)
+	policyEngine := policy.New(mq, rdb)
+	limiter := ratelimit.New(rdb)
+	forwarder := mcp.NewForwarder(staticResolver{"env:TEST_KEY": "dummy"})
+	auditPub := audit.NewMemoryPublisher()
+
+	mq.downstream.BaseUrl = mockDownstream.URL
+
+	handler := makeProxyHandler(mq, tokenMgr, policyEngine, limiter, forwarder, auditPub)
+	proxyServer := httptest.NewServer(handler)
+	defer proxyServer.Close()
+
+	token, err := tokenMgr.Issue(context.Background(), userIDStr)
+	require.NoError(t, err)
+
+	// Call allowed tool
+	reqPayload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"server":    "mock-bamboohr",
+			"name":      "get_employee_record",
+			"arguments": map[string]any{"id": "1"},
+		},
+	}
+	body, _ := json.Marshal(reqPayload)
+
+	req, _ := http.NewRequest(http.MethodPost, proxyServer.URL+"/", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	events := auditPub.Events()
+	require.Len(t, events, 1)
+	assert.Equal(t, audit.OutcomeAllowed, events[0].Outcome)
+	assert.Equal(t, userIDStr, events[0].UserID)
+	assert.Equal(t, serverIDStr, events[0].DownstreamServerID)
+	assert.Equal(t, "get_employee_record", events[0].ToolName)
+	assert.NotNil(t, events[0].LatencyMs)
+	assert.Contains(t, string(events[0].ResponseSummary), "[REDACTED]")
+}
+

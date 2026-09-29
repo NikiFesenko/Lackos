@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/mcp-gate/mcp-gate/internal/audit"
 	"github.com/mcp-gate/mcp-gate/internal/auth"
 	"github.com/mcp-gate/mcp-gate/internal/config"
 	"github.com/mcp-gate/mcp-gate/internal/db"
@@ -71,10 +72,18 @@ func main() {
 	limiter := ratelimit.New(rdb)
 	forwarder := mcp.NewForwarder(auth.EnvSecretResolver{})
 
+	// ── RabbitMQ Audit Publisher ──────────────────────────────────────────
+	auditPub, err := audit.NewRabbitMQPublisher(cfg.RabbitMQURL, 2048)
+	if err != nil {
+		slog.Error("failed to connect to rabbitmq for audit", "err", err)
+		os.Exit(1)
+	}
+	defer auditPub.Close()
+
 	// ── Router ────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
-	mux.HandleFunc("POST /", makeProxyHandler(queries, tokenMgr, policyEngine, limiter, forwarder))
+	mux.HandleFunc("POST /", makeProxyHandler(queries, tokenMgr, policyEngine, limiter, forwarder, auditPub))
 
 	addr := fmt.Sprintf(":%d", cfg.ProxyPort)
 	srv := &http.Server{
@@ -114,7 +123,13 @@ func makeProxyHandler(
 	policyEngine *policy.Engine,
 	limiter *ratelimit.Limiter,
 	forwarder *mcp.Forwarder,
+	auditPub ...audit.Publisher,
 ) http.HandlerFunc {
+	var pub audit.Publisher = audit.NopPublisher{}
+	if len(auditPub) > 0 && auditPub[0] != nil {
+		pub = auditPub[0]
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		ctx := r.Context()
@@ -207,6 +222,16 @@ func makeProxyHandler(
 		if !decision.Allowed {
 			slog.InfoContext(ctx, "proxy: request denied by policy",
 				"user_id", userID, "tool", toolName, "server", serverName)
+			latency := int32(time.Since(start).Milliseconds())
+			_ = pub.Publish(ctx, audit.NewEvent(
+				userID,
+				serverIDStr,
+				toolName,
+				audit.OutcomeDenied,
+				mcp.RedactJSONBytes(toolParams, decision.RedactFields),
+				nil,
+				&latency,
+			))
 			writeRPCError(w, req.ID, mcp.CodeForbidden, "tool call denied by policy")
 			return
 		}
@@ -224,6 +249,16 @@ func makeProxyHandler(
 				"count", rl.Count, "limit", rl.Limit)
 			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", rl.Limit))
 			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", rl.Remaining()))
+			latency := int32(time.Since(start).Milliseconds())
+			_ = pub.Publish(ctx, audit.NewEvent(
+				userID,
+				serverIDStr,
+				toolName,
+				audit.OutcomeRateLimited,
+				mcp.RedactJSONBytes(toolParams, decision.RedactFields),
+				nil,
+				&latency,
+			))
 			writeRPCError(w, req.ID, mcp.CodeRateLimited, "rate limit exceeded")
 			return
 		}
@@ -247,6 +282,17 @@ func makeProxyHandler(
 			slog.ErrorContext(ctx, "proxy: downstream forward error",
 				"server", serverName, "tool", toolName,
 				"latency_ms", time.Since(start).Milliseconds(), "err", err)
+			latency := int32(time.Since(start).Milliseconds())
+			errSummary, _ := json.Marshal(map[string]string{"error": err.Error()})
+			_ = pub.Publish(ctx, audit.NewEvent(
+				userID,
+				serverIDStr,
+				toolName,
+				audit.OutcomeError,
+				mcp.RedactJSONBytes(toolParams, decision.RedactFields),
+				errSummary,
+				&latency,
+			))
 			writeRPCError(w, req.ID, mcp.CodeUpstreamError, "downstream server error")
 			return
 		}
@@ -262,9 +308,20 @@ func makeProxyHandler(
 			}
 		}
 
+		latency := int32(time.Since(start).Milliseconds())
+		_ = pub.Publish(ctx, audit.NewEvent(
+			userID,
+			serverIDStr,
+			toolName,
+			audit.OutcomeAllowed,
+			mcp.RedactJSONBytes(toolParams, decision.RedactFields),
+			downstreamResp.Result,
+			&latency,
+		))
+
 		slog.InfoContext(ctx, "proxy: request completed",
 			"user_id", userID, "tool", toolName, "server", serverName,
-			"latency_ms", time.Since(start).Milliseconds())
+			"latency_ms", latency)
 
 		writeJSON(w, downstreamResp)
 	}

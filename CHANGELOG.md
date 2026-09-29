@@ -5,7 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Phase 7] — 2026-09-16 · React + Vite Admin Dashboard
+
+### Added
+- **`web/` — full React 18 + TypeScript + Vite SPA** replacing the static placeholder:
+  - `package.json` — dependencies: `@tanstack/react-query` v5, `react-router-dom` v6, `lucide-react`, `clsx`
+  - `vite.config.ts` — dev proxy `/api → :8081` eliminates CORS issues during local development
+  - `tsconfig.{json,app.json,node.json}` — strict TypeScript, path alias `@/*`
+  - `.env.example` — `VITE_API_BASE_URL` for running without Vite proxy
+- **`src/api.ts`** — centralised typed API client; `ApiError` class; all adminapi endpoints covered (roles, users, servers, policies, audit events, tokens); `Authorization: Bearer` header injected from localStorage
+- **`src/context/AuthContext.tsx`** — token stored in localStorage; `login` / `logout` functions; React context with `useAuth()` hook
+- **`src/App.tsx`** — React Router v6 client-side routing; auth guard via `ProtectedRoute`; all 6 page routes lazy-loaded via `React.lazy` + `Suspense`
+- **`src/components/Layout.tsx`** — persistent sidebar with `NavLink` active-state highlighting; sign-out button
+- **`src/components/ui.tsx`** — reusable primitives: `Button` (primary/danger/ghost, sm/md, loading spinner), `Input`, `Select`, `Badge` + `OutcomeBadge`, `Toggle`, `ChipInput` (comma/Enter separated, backspace to delete), `Modal` (click-outside closes), `Spinner`, `ErrorAlert`
+- **`src/components/components.css`** — design system tokens (dark slate palette), all component styles
+- **Pages** (all use TanStack Query for data + mutations with automatic cache invalidation):
+  - `Login.tsx` — admin token input; validates by calling `/api/v1/roles` before storing
+  - `Users.tsx` — paginated user list; add user modal; inline role-change modal; deactivate button
+  - `Roles.tsx` — role list; create / edit / delete with modal
+  - `Servers.tsx` — downstream server list; register / edit modal with `auth_secret_ref` note; active toggle
+  - `Policies.tsx` — role + server selector → per-tool policy matrix; each row has allow/deny `Toggle`, redact-fields `ChipInput`, RPM number input, and individual Save button with "Saved!" flash
+  - `AuditLog.tsx` — filterable by outcome / date range; paginated (50/page); expandable rows showing redacted input JSON and response summary side-by-side
+  - `Tokens.tsx` — select active user, issue / revoke proxy Bearer tokens; one-shot display with clipboard copy button
+- **`web/nginx.conf`** — SPA `try_files` fallback; `/api/` proxy to `adminapi` service (Docker Compose DNS); `Cache-Control` headers; gzip enabled
+- **`build/dashboard.Dockerfile`** — updated from Phase 1 placeholder to two-stage build: `node:20-alpine` (npm ci + vite build) → `nginx:1.27-alpine`
+- **`Makefile`** — added `web-install`, `web-dev`, `web-build` targets
+
+### Verified
+- `tsc --noEmit` — **zero TypeScript errors** (strict mode)
+- `vite build` — **1636 modules bundled in 890ms**, zero warnings; total gzipped JS ≈ 67 kB (main chunk) + per-page lazy chunks
+- All pure-logic Go tests (`internal/audit`, `internal/mcp` redact) still **PASS**; integration tests require live Redis/Docker — blocked only by sandbox network restrictions, not code defects
+
+### Next: Phase 8 — Admin Auth & Security Hardening (bcrypt passwords, JWT sessions, `admin_users` migration, request-ID middleware)
+
+---
+
 ## [Phase 1] — 2026-09-08 · Skeleton & Infrastructure
+
 
 ### Added
 - **Project structure**: established `cmd/`, `internal/`, `migrations/`, `build/`, `web/` layout.
@@ -200,3 +236,37 @@ GET              /api/v1/audit-events
 ---
 
 *Next: Phase 6 — Audit Pipeline (RabbitMQ -> Postgres, async worker, DLQ)*
+
+---
+
+## [Phase 6] — 2026-09-15 · Audit Pipeline (RabbitMQ → Postgres)
+
+### Added
+
+**New packages and services:**
+- `internal/audit`:
+  - `event.go` — audit event schema (`Event`), outcome constants (`allowed`, `denied`, `rate_limited`, `error`), topic exchange & queue definitions (`mcp_gate.audit`, `mcp_gate.audit.persist`, `mcp_gate.audit.alerting`, `mcp_gate.audit.dlx`, `mcp_gate.audit.dlq`), and dynamic routing key generation.
+  - `publisher.go` — asynchronous RabbitMQ publisher with a non-blocking memory buffer (channel capacity 2048) and background worker, persistent message delivery (`DeliveryMode: 2`), plus `MemoryPublisher` and `NopPublisher` implementations for test isolation.
+  - `writer.go` — RabbitMQ persistence worker: declares durable topic exchange, dead-letter exchange (DLX), dead-letter queue (DLQ), and persistence queue with prefetch QoS; deserializes and validates events; executes idempotent insertion into PostgreSQL (`ON CONFLICT (id) DO NOTHING`); rejects unrecoverable messages to DLQ without requeuing.
+  - `alerting.go` — real-time security alerting consumer bound to `audit.denied` and `audit.rate_limited`, with `LogAlerter` emitting structured security alert logs.
+  - `audit_test.go` — unit tests for model validation, serialization, routing keys, memory publisher, and alerter.
+- `internal/mcp`:
+  - `redact.go` — added `RedactJSONBytes` function to redact sensitive fields directly from raw JSON input parameters prior to queue dispatch.
+  - `redact_test.go` — unit tests for `RedactJSONBytes`.
+- `internal/db`:
+  - `queries/audit_events.sql` — added `InsertAuditEventWithID` query with `ON CONFLICT (id) DO NOTHING` for deduplicated audit logging.
+- `cmd/proxy`:
+  - `main.go` — wired RabbitMQ publisher into the proxy server lifecycle; publishes audit events for all outcomes (`allowed`, `denied`, `rate_limited`, `error`) with measured request latency and pre-redacted parameters.
+  - `proxy_test.go` — added `TestProxy_AuditEventsPublished` integration test verifying end-to-end event dispatch and field redaction in audit payloads.
+- `cmd/worker`:
+  - `main.go` — replaced Phase 1 skeleton with complete worker implementation: connects to PostgreSQL connection pool, starts `audit.Writer` and `audit.AlertConsumer` in parallel, and handles clean graceful shutdown via SIGTERM/SIGINT.
+
+### Design decisions
+- **Pre-dispatch Redaction**: Sensitive parameter and response fields are stripped **before** publishing to RabbitMQ. The message broker and audit table never store unredacted secrets at rest.
+- **Asynchronous, Non-blocking Ingestion**: The proxy publishes events via a buffered in-memory channel. Network jitter or queue congestion in RabbitMQ never degrades proxy response times.
+- **Idempotency & Dead-Letter Safety**: Audit events carry client-generated UUIDs and are persisted via `ON CONFLICT (id) DO NOTHING`, ensuring duplicate deliveries do not pollute the audit trail. Malformed or invalid events are rejected directly to `mcp_gate.audit.dlq` for forensic inspection.
+
+---
+
+*Next: Phase 7 — React + Vite Admin Dashboard (React 18, TypeScript, TanStack Query, shadcn/ui)*
+

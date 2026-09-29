@@ -10,6 +10,21 @@ INSERT INTO audit_events (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
+-- name: InsertAuditEventWithID :one
+INSERT INTO audit_events (
+    id,
+    user_id,
+    downstream_server_id,
+    tool_name,
+    input_params_redacted,
+    outcome,
+    response_summary,
+    latency_ms,
+    occurred_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (id) DO NOTHING
+RETURNING *;
+
 -- name: GetAuditEvent :one
 SELECT * FROM audit_events
 WHERE id = $1;

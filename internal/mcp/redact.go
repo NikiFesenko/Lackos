@@ -43,6 +43,24 @@ func RedactFields(result ToolResult, fields []string) ToolResult {
 	return out
 }
 
+// RedactJSONBytes takes raw JSON bytes and redacts any top-level keys
+// matching the provided fields list. If data is invalid JSON or fields is empty,
+// data is returned as-is.
+func RedactJSONBytes(data []byte, fields []string) []byte {
+	if len(data) == 0 || len(fields) == 0 {
+		return data
+	}
+	fieldSet := make(map[string]struct{}, len(fields))
+	for _, f := range fields {
+		fieldSet[f] = struct{}{}
+	}
+	redacted, err := redactJSON(data, fieldSet)
+	if err != nil {
+		return data
+	}
+	return redacted
+}
+
 // redactJSON replaces the values of the named keys anywhere in the JSON
 // document (top-level only) with "[REDACTED]".
 func redactJSON(data []byte, fields map[string]struct{}) ([]byte, error) {
